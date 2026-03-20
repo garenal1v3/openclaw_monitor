@@ -1,6 +1,10 @@
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { ulid } from "ulid";
 import { upsertAgent, getAgents, insertEvent, getMetadata, setMetadata, type Db } from "./db.js";
 import type { AgentStatus, MonitorEvent } from "../shared/types.js";
+
+const execFileAsync = promisify(execFile);
 
 const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 
@@ -65,32 +69,24 @@ export async function pollSessions(
   config: PollConfig,
   broadcastAgents: (agents: AgentStatus[]) => void,
 ): Promise<void> {
-  let response: Response;
+  let sessions: GatewaySession[];
 
   try {
-    response = await fetch(config.gatewayUrl + "/tools/invoke", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + config.gatewayToken,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {} }),
-    });
+    // Use CLI for reliable cross-agent visibility (HTTP API is scoped to calling agent)
+    const nvmPrefix = 'export NVM_DIR="/home/nikita/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; nvm use 22 >/dev/null 2>&1;';
+    const { stdout } = await execFileAsync("bash", ["-c", `${nvmPrefix} openclaw sessions --all-agents --json 2>/dev/null`], { timeout: 10000 });
+    // CLI outputs plugin warnings before JSON — find the JSON part
+    const jsonStart = stdout.indexOf("{");
+    if (jsonStart === -1) {
+      console.error("[polling] no JSON in CLI output");
+      return;
+    }
+    const raw = JSON.parse(stdout.slice(jsonStart));
+    sessions = (raw.sessions ?? []) as GatewaySession[];
   } catch (err) {
-    console.error("[polling] gateway unreachable:", err);
+    console.error("[polling] CLI failed:", err);
     return;
   }
-
-  let rawData: unknown;
-  try {
-    rawData = await response.json();
-  } catch (err) {
-    console.error("[polling] failed to parse gateway response:", err);
-    return;
-  }
-
-  // Gateway wraps response: { ok, result: { details: { sessions: [...] } } }
-  const sessions = extractSessions(rawData);
   const now = Date.now();
 
   const grouped = new Map<
