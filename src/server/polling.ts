@@ -27,6 +27,25 @@ interface GatewayResponse {
   sessions: GatewaySession[];
 }
 
+/** Extract first top-level JSON object from string that may have trailing non-JSON text */
+function extractJsonObject(str: string): string | null {
+  const start = str.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < str.length; i++) {
+    const c = str[i];
+    if (escape) { escape = false; continue; }
+    if (c === "\\" && inString) { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return str.slice(start, i + 1); }
+  }
+  return null;
+}
+
 function extractSessions(raw: unknown): GatewaySession[] {
   if (raw && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
@@ -75,13 +94,13 @@ export async function pollSessions(
     // Use CLI for reliable cross-agent visibility (HTTP API is scoped to calling agent)
     const nvmPrefix = 'export NVM_DIR="/home/nikita/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; nvm use 22 >/dev/null 2>&1;';
     const { stdout } = await execFileAsync("bash", ["-c", `${nvmPrefix} openclaw sessions --all-agents --json 2>/dev/null`], { timeout: 10000 });
-    // CLI outputs plugin warnings before JSON — find the JSON part
-    const jsonStart = stdout.indexOf("{");
-    if (jsonStart === -1) {
+    // CLI outputs plugin warnings after JSON — extract top-level JSON object by brace matching
+    const jsonStr = extractJsonObject(stdout);
+    if (!jsonStr) {
       console.error("[polling] no JSON in CLI output");
       return;
     }
-    const raw = JSON.parse(stdout.slice(jsonStart));
+    const raw = JSON.parse(jsonStr);
     sessions = (raw.sessions ?? []) as GatewaySession[];
   } catch (err) {
     console.error("[polling] CLI failed:", err);
