@@ -23,6 +23,22 @@ interface GatewayResponse {
   sessions: GatewaySession[];
 }
 
+function extractSessions(raw: unknown): GatewaySession[] {
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    // Direct format: { sessions: [...] }
+    if (Array.isArray(obj.sessions)) return obj.sessions as GatewaySession[];
+    // Gateway wrapped: { ok, result: { details: { sessions: [...] } } }
+    const result = obj.result as Record<string, unknown> | undefined;
+    if (result) {
+      const details = result.details as Record<string, unknown> | undefined;
+      if (details && Array.isArray(details.sessions)) return details.sessions as GatewaySession[];
+      if (Array.isArray(result.sessions)) return result.sessions as GatewaySession[];
+    }
+  }
+  return [];
+}
+
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startPolling(
@@ -58,22 +74,23 @@ export async function pollSessions(
         Authorization: "Bearer " + config.gatewayToken,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: { activeMinutes: 120 } }),
+      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {} }),
     });
   } catch (err) {
     console.error("[polling] gateway unreachable:", err);
     return;
   }
 
-  let data: GatewayResponse;
+  let rawData: unknown;
   try {
-    data = (await response.json()) as GatewayResponse;
+    rawData = await response.json();
   } catch (err) {
     console.error("[polling] failed to parse gateway response:", err);
     return;
   }
 
-  const sessions = data.sessions ?? [];
+  // Gateway wraps response: { ok, result: { details: { sessions: [...] } } }
+  const sessions = extractSessions(rawData);
   const now = Date.now();
 
   const grouped = new Map<
@@ -148,22 +165,22 @@ export async function catchUp(db: Db, config: PollConfig): Promise<void> {
         Authorization: "Bearer " + config.gatewayToken,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: { activeMinutes: 120 } }),
+      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {} }),
     });
   } catch (err) {
     console.error("[catchUp] gateway unreachable, skipping:", err);
     return;
   }
 
-  let listData: GatewayResponse;
+  let rawListData: unknown;
   try {
-    listData = (await response.json()) as GatewayResponse;
+    rawListData = await response.json();
   } catch (err) {
     console.error("[catchUp] failed to parse sessions_list response:", err);
     return;
   }
 
-  const sessions = listData.sessions ?? [];
+  const sessions = extractSessions(rawListData);
 
   for (const session of sessions) {
     const parts = session.key?.split(":") ?? [];
