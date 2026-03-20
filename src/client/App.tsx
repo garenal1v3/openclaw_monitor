@@ -55,7 +55,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-950 text-gray-100">
+    <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       <nav className="flex items-center gap-4 px-4 py-2 bg-gray-900 border-b border-gray-800">
         <span className="font-semibold text-lg tracking-tight mr-4">
           OpenClaw Monitor
@@ -79,7 +79,7 @@ export function App() {
         </div>
       </nav>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 min-h-0">
         {route === "dashboard" && (
           <Dashboard
             agents={monitor.agents}

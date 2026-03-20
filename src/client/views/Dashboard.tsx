@@ -15,14 +15,14 @@ export function Dashboard({ agents, events, interactions }: Props) {
 
   return (
     <div className="flex h-full relative">
-      <div className="flex-[7] min-w-0">
+      <div className="flex-[7] min-w-0 h-full">
         <AgentGraph
           agents={agents}
           interactions={interactions}
           onSelectAgent={setSelectedAgent}
         />
       </div>
-      <div className="flex-[3] min-w-0 border-l border-gray-800">
+      <div className="flex-[3] min-w-0 h-full border-l border-gray-800">
         <EventFeed events={events} />
       </div>
       {selectedAgent && (
