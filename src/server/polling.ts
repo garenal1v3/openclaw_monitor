@@ -1,5 +1,6 @@
-import { upsertAgent, getAgents, type Db } from "./db.js";
-import type { AgentStatus } from "../shared/types.js";
+import { ulid } from "ulid";
+import { upsertAgent, getAgents, insertEvent, getMetadata, setMetadata, type Db } from "./db.js";
+import type { AgentStatus, MonitorEvent } from "../shared/types.js";
 
 const ACTIVE_THRESHOLD_MS = 5 * 60 * 1000;
 
@@ -124,4 +125,149 @@ export async function pollSessions(
   }
 
   broadcastAgents(getAgents(db));
+}
+
+interface HistoryMessage {
+  role?: string;
+  content?: string;
+  timestamp?: number;
+  toolResults?: Array<{ toolCallId?: string; content?: string; timestamp?: number }>;
+}
+
+interface HistoryResponse {
+  messages?: HistoryMessage[];
+}
+
+export async function catchUp(db: Db, config: PollConfig): Promise<void> {
+  let response: Response;
+
+  try {
+    response = await fetch(config.gatewayUrl + "/tools/invoke", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + config.gatewayToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ tool: "sessions_list", action: "json", args: { activeMinutes: 120 } }),
+    });
+  } catch (err) {
+    console.error("[catchUp] gateway unreachable, skipping:", err);
+    return;
+  }
+
+  let listData: GatewayResponse;
+  try {
+    listData = (await response.json()) as GatewayResponse;
+  } catch (err) {
+    console.error("[catchUp] failed to parse sessions_list response:", err);
+    return;
+  }
+
+  const sessions = listData.sessions ?? [];
+
+  for (const session of sessions) {
+    const parts = session.key?.split(":") ?? [];
+    if (parts[0] !== "agent" || parts.length < 2) {
+      continue;
+    }
+
+    const agentId = parts[1];
+    const hwmKey = "hwm:" + agentId;
+    const hwmRaw = getMetadata(db, hwmKey);
+    const hwm = hwmRaw !== undefined ? parseInt(hwmRaw, 10) : 0;
+
+    let histResponse: Response;
+    try {
+      histResponse = await fetch(config.gatewayUrl + "/tools/invoke", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + config.gatewayToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          tool: "sessions_history",
+          action: "json",
+          args: { sessionKey: session.key, includeTools: true, limit: 100 },
+        }),
+      });
+    } catch (err) {
+      console.error("[catchUp] failed to fetch history for session", session.key, err);
+      continue;
+    }
+
+    let histData: HistoryResponse;
+    try {
+      histData = (await histResponse.json()) as HistoryResponse;
+    } catch (err) {
+      console.error("[catchUp] failed to parse history for session", session.key, err);
+      continue;
+    }
+
+    const messages = histData.messages ?? [];
+    let maxTimestamp = hwm;
+
+    for (const msg of messages) {
+      const ts = msg.timestamp ?? 0;
+      if (ts <= hwm) {
+        continue;
+      }
+
+      if (msg.role === "user" && msg.content) {
+        const event: MonitorEvent = {
+          id: ulid(ts),
+          timestamp: ts,
+          eventType: "message_received",
+          agentId,
+          sessionKey: session.key,
+          fromAgent: null,
+          toAgent: agentId,
+          content: msg.content,
+          toolCallId: null,
+          toolName: null,
+          toolInput: null,
+          toolOutput: null,
+          model: null,
+          inputTokens: null,
+          outputTokens: null,
+          metadata: null,
+        };
+        insertEvent(db, event);
+      }
+
+      if (msg.toolResults) {
+        for (const tr of msg.toolResults) {
+          const trTs = tr.timestamp ?? ts;
+          if (trTs <= hwm) {
+            continue;
+          }
+          const trEvent: MonitorEvent = {
+            id: ulid(trTs),
+            timestamp: trTs,
+            eventType: "tool_result",
+            agentId,
+            sessionKey: session.key,
+            fromAgent: null,
+            toAgent: null,
+            content: tr.content ?? null,
+            toolCallId: tr.toolCallId ?? null,
+            toolName: null,
+            toolInput: null,
+            toolOutput: tr.content ?? null,
+            model: null,
+            inputTokens: null,
+            outputTokens: null,
+            metadata: null,
+          };
+          insertEvent(db, trEvent);
+          maxTimestamp = Math.max(maxTimestamp, trTs);
+        }
+      }
+
+      maxTimestamp = Math.max(maxTimestamp, ts);
+    }
+
+    if (maxTimestamp > hwm) {
+      setMetadata(db, hwmKey, String(maxTimestamp));
+    }
+  }
 }
