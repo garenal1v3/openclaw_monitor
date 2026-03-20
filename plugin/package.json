@@ -1,0 +1,7 @@
+{
+  "name": "openclaw-monitor-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "description": "OpenClaw plugin that sends agent events to openclaw-monitor dashboard"
+}
