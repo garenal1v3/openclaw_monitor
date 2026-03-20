@@ -52,14 +52,12 @@ export function createWsHandler(db: Db) {
       const client: ConnectedClient = { socket, filters: null };
       clients.add(client);
 
-      setImmediate(() => {
-        sendMessage(socket, {
-          type: "init",
-          data: {
-            agents: getAgents(db),
-            recentEvents: getEvents(db, { limit: 50 }),
-          },
-        });
+      sendMessage(socket, {
+        type: "init",
+        data: {
+          agents: getAgents(db),
+          recentEvents: getEvents(db, { limit: 50 }),
+        },
       });
 
       socket.on("message", (raw) => {
