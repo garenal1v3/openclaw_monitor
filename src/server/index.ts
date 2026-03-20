@@ -12,6 +12,7 @@ import { registerQueryRoutes } from "./routes.js";
 import { createWsHandler } from "./ws.js";
 import { startPolling, catchUp } from "./polling.js";
 import { startRetention } from "./retention.js";
+import { startTranscriptWatcher } from "./transcript-watcher.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -43,6 +44,7 @@ if (existsSync(clientDir)) {
 await catchUp(db, config);
 startPolling(db, config, broadcastAgents);
 startRetention(db, config.retentionDays);
+startTranscriptWatcher(db, config.openclawHome, broadcast);
 
 await app.listen({ port: config.port, host: config.host });
 console.log(`OpenClaw Monitor running at http://${config.host}:${config.port}`);
